@@ -42,6 +42,13 @@ Para que a automação possa acontecer é necessário ter [Python](https://pytho
     pip install -r requirements.txt
     ```
 
+## Configurações de ambiente
+
+Crie um arquivo .env com base no .env.example
+
+**APP_DEBUG**: Informar `false` caso queira ver a automação no navegador
+**APLICACAO**: Aplicação que você deseja realizar a exportação dos objetos, como telas e componentes. Ex: `1`
+
 ### clientes.json
 
 Crie um arquivo chamado clientes.json com base no clientes.example.json e preencha com os clientes que deseja realizar a exportação dos arquivos. Exemplo:

@@ -4,12 +4,22 @@ import os
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 # Função para ler JSON de arquivo
 def ler_json(caminho_arquivo):
     with open(caminho_arquivo, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def limpar_pasta():
+    for arquivo in os.listdir("script"):
+        if arquivo.endswith(".sql"):
+            caminho_arquivo = os.path.join("script", arquivo)
+            os.remove(caminho_arquivo)
 
 
 def login_apex(page, usuario, senha, workspace):
@@ -113,10 +123,10 @@ def navegar_para_export_app_telas_lovs(page):
         print("Iniciando exportação de aplicação/telas/lovs...")
         clicar_menu(page, "0i")
 
-        sucesso = clicar_card_por_codigo(page, 101)
+        sucesso = clicar_card_por_codigo(page, os.getenv("APLICACAO"))
 
         if sucesso:
-            sucesso = clicar_card_para_exportar(page, 101)
+            sucesso = clicar_card_para_exportar(page, os.getenv("APLICACAO"))
             if sucesso:
                 page.click("#B45317931133446209")
                 return
@@ -126,25 +136,47 @@ def navegar_para_export_app_telas_lovs(page):
         return False
 
 
-def download_arquivo(page, cliente, objeto, id_botao):
+def navegar_para_export_outros(page, definicao_outro):
+    try:
+        print("Iniciando exportação de pkg/prc/fnc/trg/view...")
+        clicar_menu(page, "1i")
+
+        link = page.locator("a.a-ImageNav-link").filter(
+            has=page.locator("span.a-ImageNav-label", has_text="Object Browser")
+        )
+        link.first.click()
+
+        page.wait_for_timeout(5000)
+        page.select_option("#obObjectSelect", definicao_outro)
+        page.wait_for_timeout(5000)
+
+    except Exception as e:
+        print(f"Erro ao tentar exportar pkg/prc/fnc/trg/view...")
+        return False
+
+
+def download_arquivo(page, cliente, objeto, id_botao, frame=None):
     try:
         pasta_destino = "script"
         os.makedirs(pasta_destino, exist_ok=True)
 
         # Gera nome do arquivo: AAAAMMDDHHMM_nomeCliente_nomeObjetoExportado.sql
         timestamp = datetime.now().strftime("%Y%m%d%H%M")
-        nome_arquivo = f"{timestamp}_{cliente}_f{101}_{objeto}.sql"
+        nome_arquivo = f"{timestamp}_{cliente}_f{os.getenv("APLICACAO")}_{objeto}.sql"
         caminho_completo = os.path.join(pasta_destino, nome_arquivo)
 
         with page.expect_download() as download_info:
-            page.click(id_botao)
+            if frame:
+                frame.click(id_botao)
+            else:
+                page.click(id_botao)
 
         download = download_info.value
         download.save_as(caminho_completo)
         return True
 
     except Exception as e:
-        print(f"Erro ao tentar exportar aplicações")
+        print(f"Erro ao tentar exportar aplicações: {e}")
         return False
 
 
@@ -198,22 +230,26 @@ def exportar_tela(page, cliente_nome, tela_ids):
         print(f"Erro ao tentar exportar telas")
 
 
-def exportar_lov(page, cliente_nome, nome_lovs):
+def buscar_dado_identico_varios_dados(lista, nome):
     try:
-        navegar_para_export_app_telas_lovs(page)
+        count = lista.count()
 
-        print(f"Exportando lovs...{nome_lovs}")
+        encontrado = None
+        for i in range(count):
+            texto = lista.nth(i).inner_text().strip()
+            if texto == nome:
+                encontrado = lista.nth(i)
+                break
 
-        page.wait_for_selector('a:has-text("Component Export")', timeout=10000)
-        page.click('a:has-text("Component Export")')
-
+        return encontrado
     except Exception as e:
-        print(f"Erro ao tentar exportar lovs")
+        print(f"Erro ao tentar exportar aplicações: {e}")
+        return None
 
 
-def exportar_componentes(page, nome_cliente, nomes_componentes):
+def exportar_componentes(page, cliente_nome, nome_componentes):
     try:
-        for nome in nomes_componentes:
+        for nome in nome_componentes:
             navegar_para_export_app_telas_lovs(page)
 
             print("Iniciando exportação de componentes...")
@@ -237,14 +273,8 @@ def exportar_componentes(page, nome_cliente, nomes_componentes):
 
                 # Busca todos os <td> da coluna NAME
                 tds = page.locator('td[headers="NAME"]')
-                count = tds.count()
 
-                encontrado = None
-                for i in range(count):
-                    texto = tds.nth(i).inner_text().strip()
-                    if texto == nome:
-                        encontrado = tds.nth(i)
-                        break
+                encontrado = buscar_dado_identico_varios_dados(tds, nome)
 
                 if encontrado:
                     print(f" Componente encontrado: {nome}")
@@ -255,7 +285,7 @@ def exportar_componentes(page, nome_cliente, nomes_componentes):
                     page.click("#B205852907944540404")
                     page.click("#B207498113252624579")
 
-                    download_arquivo(page, nome_cliente, nome, "#B210501022616376574")
+                    download_arquivo(page, cliente_nome, nome, "#B210501022616376574")
                 else:
                     print(f" Componente '{nome}' não encontrado.")
 
@@ -268,12 +298,206 @@ def exportar_componentes(page, nome_cliente, nomes_componentes):
         return False
 
 
+def exportar_pkg(page, cliente_nome, nome_packages):
+    try:
+        navegar_para_export_outros(page, "PACKAGE")
+
+        for nome in nome_packages:
+            nome = nome.upper()
+
+            page.fill('input[type="text"]', "")
+            page.fill('input[type="text"]', nome)
+            page.press('input[type="text"]', "Enter")
+            page.wait_for_timeout(1000)
+
+            lista = page.locator("#ob_ObjectsSlider .o_V")
+
+            encontrado = buscar_dado_identico_varios_dados(lista, nome)
+
+            if encontrado:
+                encontrado.click()
+                frame = page.frame(name="dbaseContent")
+
+                download_arquivo(
+                    page,
+                    cliente_nome,
+                    nome,
+                    "button:has-text('Download Source')",
+                    frame,
+                )
+
+                frame.click('a:has-text("Body")')
+                page.wait_for_timeout(1000)
+
+                download_arquivo(
+                    page,
+                    cliente_nome,
+                    nome,
+                    "button:has-text('Download Source')",
+                    frame,
+                )
+            else:
+                print(f" Componente '{nome}' não encontrado.")
+
+    except Exception as e:
+        print(f"Erro ao tentar exportar Componente: {e}")
+
+
+def exportar_prc(page, cliente_nome, nome_procedures):
+    try:
+        navegar_para_export_outros(page, "PROCEDURE")
+
+        for nome in nome_procedures:
+            nome = nome.upper()
+
+            page.fill('input[type="text"]', "")
+            page.fill('input[type="text"]', nome)
+            page.press('input[type="text"]', "Enter")
+            page.wait_for_timeout(1000)
+
+            lista = page.locator("#ob_ObjectsSlider .o_V")
+
+            encontrado = buscar_dado_identico_varios_dados(lista, nome)
+
+            if encontrado:
+                encontrado.click()
+                frame = page.frame(name="dbaseContent")
+
+                download_arquivo(
+                    page,
+                    cliente_nome,
+                    nome,
+                    "button:has-text('Download Source')",
+                    frame,
+                )
+
+            else:
+                print(f" Componente '{nome}' não encontrado.")
+
+    except Exception as e:
+        print(f"Erro ao tentar exportar Componente: {e}")
+
+
+def exportar_fnc(page, cliente_nome, nome_functions):
+    try:
+        navegar_para_export_outros(page, "FUNCTION")
+
+        for nome in nome_functions:
+            nome = nome.upper()
+
+            page.fill('input[type="text"]', "")
+            page.fill('input[type="text"]', nome)
+            page.press('input[type="text"]', "Enter")
+            page.wait_for_timeout(1000)
+
+            lista = page.locator("#ob_ObjectsSlider .o_V")
+
+            encontrado = buscar_dado_identico_varios_dados(lista, nome)
+
+            if encontrado:
+                encontrado.click()
+                frame = page.frame(name="dbaseContent")
+
+                download_arquivo(
+                    page,
+                    cliente_nome,
+                    nome,
+                    "button:has-text('Download Source')",
+                    frame,
+                )
+
+            else:
+                print(f" Componente '{nome}' não encontrado.")
+
+    except Exception as e:
+        print(f"Erro ao tentar exportar Componente: {e}")
+
+
+def exportar_trg(page, cliente_nome, nome_triggers):
+    try:
+        navegar_para_export_outros(page, "TRIGGER")
+
+        for nome in nome_triggers:
+            nome = nome.upper()
+
+            page.fill('input[type="text"]', "")
+            page.fill('input[type="text"]', nome)
+            page.press('input[type="text"]', "Enter")
+            page.wait_for_timeout(1000)
+
+            lista = page.locator("#ob_ObjectsSlider .o_V")
+
+            encontrado = buscar_dado_identico_varios_dados(lista, nome)
+
+            if encontrado:
+                encontrado.click()
+                frame = page.frame(name="dbaseContent")
+
+                frame.click('a:has-text("Code")')
+                page.wait_for_timeout(1000)
+
+                download_arquivo(
+                    page,
+                    cliente_nome,
+                    nome,
+                    "button:has-text('Download Source')",
+                    frame,
+                )
+
+            else:
+                print(f" Componente '{nome}' não encontrado.")
+
+    except Exception as e:
+        print(f"Erro ao tentar exportar Componente: {e}")
+
+
+def exportar_view(page, cliente_nome, nome_views):
+    try:
+        navegar_para_export_outros(page, "VIEW")
+
+        for nome in nome_views:
+            nome = nome.upper()
+
+            page.fill('input[type="text"]', "")
+            page.fill('input[type="text"]', nome)
+            page.press('input[type="text"]', "Enter")
+            page.wait_for_timeout(1000)
+
+            lista = page.locator("#ob_ObjectsSlider .o_V")
+
+            encontrado = buscar_dado_identico_varios_dados(lista, nome)
+
+            if encontrado:
+                encontrado.click()
+                frame = page.frame(name="dbaseContent")
+
+                frame.click('a:has-text("Code")')
+                page.wait_for_timeout(1000)
+
+                download_arquivo(
+                    page,
+                    cliente_nome,
+                    nome,
+                    "button:has-text('Download Source')",
+                    frame,
+                )
+
+            else:
+                print(f" Componente '{nome}' não encontrado.")
+
+    except Exception as e:
+        print(f"Erro ao tentar exportar Componente: {e}")
+
+
 def main():
     clientes = ler_json("clientes.json")
     objetos = ler_json("objetos.json")
+    limpar_pasta()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        abrirNavegador = os.getenv("APP_DEBUG").lower() == "true"
+
+        browser = p.chromium.launch(headless=abrirNavegador)
         context = browser.new_context(accept_downloads=True)
 
         for cliente_nome, cliente_info in clientes.items():
@@ -315,10 +539,16 @@ def main():
                     exportar_tela(page, cliente_nome, objetos.get("telas"))
                 if objetos.get("componentes"):
                     exportar_componentes(page, cliente_nome, objetos.get("componentes"))
-                # elif rota == "outros":
-                #     print("Iniciando exportação de objetos técnicos (pkg, prc, etc)...")
-                #     navegar_para_outros_objetos(page)
-
+                if objetos.get("pkg"):
+                    exportar_pkg(page, cliente_nome, objetos.get("pkg"))
+                if objetos.get("prc"):
+                    exportar_prc(page, cliente_nome, objetos.get("prc"))
+                if objetos.get("fnc"):
+                    exportar_fnc(page, cliente_nome, objetos.get("fnc"))
+                if objetos.get("trg"):
+                    exportar_trg(page, cliente_nome, objetos.get("trg"))
+                if objetos.get("view"):
+                    exportar_view(page, cliente_nome, objetos.get("view"))
                 else:
                     print("Nenhum objeto especificado para exportação.")
 
